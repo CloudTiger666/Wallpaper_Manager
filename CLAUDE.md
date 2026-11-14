@@ -9,7 +9,7 @@ Wallpaper Engine Web Manager —— 基于 Flask 的本地壁纸管理工具,通
 ## 常用命令
 
 ```bash
-# 安装依赖(仅 Flask / vdf / Pillow)
+# 安装依赖(requirements.txt 含 Flask / vdf / Pillow；当前代码只使用 Flask 与 vdf)
 pip install -r requirements.txt
 
 # 开发运行(debug=True,开启 Flask reloader)→ http://127.0.0.1:5000
@@ -34,7 +34,7 @@ build.bat            # 等价于: python -m PyInstaller launcher.spec
 
 ### 三层结构,共享同一个 `config` dict
 
-路由层(`app.py`)→ 业务 API 层(`api/`)→ 数据访问层(`utils/`)。`WallpaperAPI`、`ConfigAPI`、`SteamParser`、`ImageProcessor` 在构造时都接收同一个 `app.config` dict 引用;**修改配置后必须调用 `steam_parser.invalidate_cache()`**(见 `POST /api/config`),否则旧路径的缓存(订阅数据 30s TTL)不会失效。
+路由层(`app.py`)→ 业务 API 层(`api/`)→ 数据访问层(`utils/`)。`WallpaperAPI`、`ConfigAPI`、`SteamParser`、`ImageProcessor` 在构造时都接收同一个 `app.config` dict 引用;**修改配置后必须调用 `steam_parser.invalidate_cache()`**(见 `POST /api/config`),否则旧路径的订阅缓存(30s TTL)不会失效。这一步只清 SteamParser 的订阅/用户缓存。`WallpaperAPI` 的大小、project.json、完整信息缓存按 wallpaper id 保留,切换 `steam_library_path` 后相同 ID 可能命中旧缓存。网页保存配置时会把 `server.host` 写成 `127.0.0.1`;端口和 `debug` 要重启进程才生效,路径变更会立即参与下一次查询。
 
 ### 数据来源(纯本地解析,无网络)
 
@@ -65,10 +65,12 @@ build.bat            # 等价于: python -m PyInstaller launcher.spec
 ### 订阅检测与置信度
 
 订阅数据两级优先级(`SteamParser`):
-1. **首选**:读每个用户的 `userdata/<uid>/ugc/431960_subscriptions.vdf`(实时、按用户、区分 `disabled_locally`),多用户取活跃订阅**并集**。
-2. **回退**:上面读不到时读 `appworkshop_431960.acf` 的 `WorkshopItemsInstalled`(只反映已安装,不区分用户)。
+1. **首选**:读每个用户的 `userdata/<uid>/ugc/431960_subscriptions.vdf`(实时、按用户、区分 `disabled_locally`)。活跃订阅 = 未本地禁用。多用户取活跃订阅**并集**。
+2. **回退**:`load_workshop_data()` / `get_realtime_subscription_status()` 在 VDF 读不到时,再读 `appworkshop_431960.acf` 的 `WorkshopItemsInstalled`(只反映已安装,不区分用户)。
 
-`get_wallpaper_details` 返回 `confidence`:实时 VDF 命中为 `'high'`,回退 ACF 为 `'medium'`。详情接口里 `subscribed` 字段任一用户活跃订阅即为 `True`。
+列表和统计**不走** ACF 回退。`list_wallpaper_ids` / `get_statistics` 只调用 `get_realtime_subscribed_items()`;返回 `None` 时当成空集合,磁盘上的壁纸全部归入未订阅。按单个用户过滤时,「未订阅」是该用户活跃集合之外的全部本地文件夹,其中可以包含其他用户仍在订阅的项。
+
+`get_wallpaper_details` 的 `confidence` 与「VDF=high、ACF=medium」不完全一致:`get_realtime_subscription_status()` 在 VDF 缺失时会在解析器内部回退到 ACF 并返回布尔值,详情接口因此几乎总是标 `'high'`。只有该方法本身返回 `None`(异常)时,详情接口才再读 ACF 并标 `'medium'`。`subscribed` 在 VDF 可用时表示任一用户活跃订阅;走内部 ACF 回退时表示该 ID 在已安装清单中。
 
 ### 打包后的数据目录模式(`utils/paths.py`)
 
